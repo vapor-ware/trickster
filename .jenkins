@@ -1,0 +1,102 @@
+#!/usr/bin/env groovy
+
+def getVersion() {
+  if (env.TAG_NAME == null) {
+    return "${env.BRANCH_NAME}-${env.GIT_COMMIT}"
+  } else {
+    return "${env.TAG_NAME}"
+  }
+}
+
+pipeline {
+
+  agent any
+
+  environment {
+    IMAGE_NAME = 'vaporio/trickster'
+  }
+
+
+  stages {
+
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
+    }
+
+    stage('Build Image') {
+      environment {
+        IMAGE_VERSION = getVersion()
+      }
+      steps {
+        script {
+          BUILD_DATE = sh (
+            script: 'date -u +%Y-%m-%dT%T 2> /dev/null',
+            returnStdout: true
+          ).trim()
+
+          sh """
+            docker build --pull \
+             --label version=${IMAGE_VERSION} \
+             --label commit=${env.GIT_COMMIT} \
+             --label build.source=${env.BRANCH_NAME} \
+             --label build.number=${env.BUILD_NUMBER} \
+             --label build.date=${BUILD_DATE} \
+            -t ${IMAGE_NAME}:latest-amd64 \
+            .
+          """
+        }
+      }
+    }
+
+    stage('Publish Images (:latest)') {
+      when {
+        branch 'master'
+      }
+       steps {
+         withDockerRegistry(registry: [credentialsId: 'vio-docker-hub']) {
+          sh "docker push ${IMAGE_NAME}:latest-amd64"
+         }
+       }
+    }
+
+    stage('Publish Manifest (:latest)') {
+      when {
+        branch 'master'
+      }
+      steps {
+        withDockerRegistry(registry: [credentialsId: 'vio-docker-hub']) {
+          sh "docker manifest create --amend ${IMAGE_NAME}:latest ${IMAGE_NAME}:latest-amd64"
+          sh "docker manifest push --purge ${IMAGE_NAME}:latest"
+        }
+      }
+    }
+
+  stage('Publish Images (:<tag>)') {
+      when {
+        buildingTag()
+      }
+      steps {
+        withDockerRegistry(registry: [credentialsId: 'vio-docker-hub']) {
+          sh "docker tag ${IMAGE_NAME}:latest-amd64 ${IMAGE_NAME}:${TAG_NAME}-amd64"
+          sh "docker push ${IMAGE_NAME}:${TAG_NAME}-amd64"
+        }
+      }
+    }
+
+    stage('Publish Manifest (:<tag>)') {
+      when {
+        buildingTag()
+      }
+      steps {
+        withDockerRegistry(registry: [credentialsId: 'vio-docker-hub']) {
+          sh "docker manifest create --amend ${IMAGE_NAME}:${TAG_NAME} ${IMAGE_NAME}:${TAG_NAME}-amd64"
+          sh "docker manifest push --purge ${IMAGE_NAME}:${TAG_NAME}"
+        }
+      }
+    }
+
+
+  }
+}
